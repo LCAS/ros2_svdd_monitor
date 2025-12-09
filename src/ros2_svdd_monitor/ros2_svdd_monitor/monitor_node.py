@@ -124,6 +124,9 @@ class MonitorNode(Node):
 
 def main(args=None):
     """Main entry point for monitoring node."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
     rclpy.init(args=args)
     
     try:
@@ -132,7 +135,7 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     except Exception as e:
-        print(f'Error: {e}')
+        logger.error(f'Error: {e}')
     finally:
         rclpy.shutdown()
 
