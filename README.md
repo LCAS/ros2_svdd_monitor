@@ -1,82 +1,200 @@
-## ROS2 Package Template
+# ROS2 SVDD Monitor
 
-This repository serves as a template for creating ROS2 packages, equipped with a comprehensive CI workflow and devcontainer configuration.
+A ROS2 Humble package for real-time anomaly detection using Support Vector Data Description (SVDD). This package monitors robot behavior by analyzing IMU and velocity command data to detect anomalous patterns.
 
-### Development Environment Setup
+## Overview
 
-To begin development in a containerized environment:
+The `ros2_svdd_monitor` package implements anomaly detection using One-Class SVM (Support Vector Data Description). It subscribes to `/imu` and `/cmd_vel` topics, extracts features from the sensor data, and uses a trained SVDD model to detect anomalies in robot behavior.
 
-1. **Use this repo as a template:**
-   The best way to work with this repo is to use it as a template for your ROS package development, to do so, in the top right corner select `Use this template`:
-   
-   ![2024-04-24](https://github.com/LCAS/ros2_pkg_template/assets/47870260/2aba3511-7a3f-4e88-a3c1-26ba2be48b45)
+## Features
 
-   Then in the next step specify the owner and the package name as shown below:
-   
-   ![template](https://github.com/LCAS/ros2_pkg_template/assets/47870260/b564c9d7-81d4-4dc1-baba-9355b59d09c1)
-   
+- **Real-time anomaly detection** using SVDD/One-Class SVM
+- **Feature extraction** from IMU and cmd_vel data
+- **Two-phase operation**: training and monitoring
+- **Configurable parameters** for model training and detection
+- **ROS2 integration** with standard message types
+- **Comprehensive testing** with pytest
 
-3. **Open in Visual Studio Code:**
-   Open the cloned repository in VSCode. VSCode will prompt you to "Reopen in Container." Alternatively, you can use the command palette (`Ctrl+Shift+P`) and search for the "reopen in container" command.
+## Installation
 
-   ![Reopen in Container](https://github.com/LCAS/ros2_pkg_template/assets/47870260/52b26ae9-ffe9-4e7c-afb9-88cee88f870f)
+### Prerequisites
 
-   Then this will promote you with the following two options:
-   ![image](https://github.com/user-attachments/assets/d0885c75-59de-4b5d-a8b7-c38bf02444d4)
+- ROS2 Humble
+- Python 3.8+
+- pip
 
-   You may select the base image according to your targeted application. For instance, if the nodes do not require GPU processing tasks, it is preferable to use the default devcontainer as it is more lightweight.
+### Dependencies
 
-5. **Container Setup:**
-   Once reopened in the container, VSCode will initiate the building process and pull all necessary dependencies. You can monitor the building log within VSCode.
+Install Python dependencies:
 
-   ![Devcontainer Log](https://github.com/LCAS/ros2_pkg_template/assets/47870260/4a01e140-972e-4f10-b866-acaabf6b4cfd)
+```bash
+pip install -r requirements.txt
+```
 
-6. **Verify Container Environment:**
-   After the build completes, VSCode will connect to the container. You can verify that you are within the container environment.
+### Build
 
-   ![In Container](https://github.com/LCAS/ros2_pkg_template/assets/47870260/9efec878-5d83-4aed-a9d0-8a1cf6bbf655)
+```bash
+cd /path/to/workspace
+colcon build --packages-select ros2_svdd_monitor
+source install/setup.bash
+```
 
-### Devcontainer Features
+## Usage
 
-The devcontainer includes a light desktop interface. To utilize this feature:
+### Training Phase
 
-1. **Configuration:**
-   Add the following features to the devcontainer configuration:
+First, collect normal operation data and train the SVDD model:
 
-   ```json
-   "features": {
-       "ghcr.io/LCAS/devcontainer-features/desktop-lite:1": {}
-   },
-   "forwardPorts": [6080, 5801],
-   "portsAttributes": {
-       "6080": {
-           "label": "desktop"
-       },
-       "5801": {
-           "label": "desktop opengl"
-       }
-   }
-   ```
+```bash
+ros2 run ros2_svdd_monitor train
+```
 
-2. **Accessing the Desktop Interface:**
-   Open the user interface by navigating to the PORTS tab in VSCode, selecting port `6080` (or port `5801` for the CUDA-OpenGL version), and opening it in the browser.
+The training node will:
+1. Subscribe to `/imu` and `/cmd_vel` topics
+2. Collect data for 60 seconds (configurable)
+3. Extract features from the sensor data
+4. Train the SVDD model
+5. Save the trained model to `~/svdd_model.pkl`
 
-   ![Open in Browser](https://github.com/LCAS/ros2_pkg_template/assets/47870260/b61f4c95-453b-4c92-ad66-5133c91abb05)
+**Important**: Ensure your robot is operating normally during the training phase, as the model will learn what "normal" behavior looks like.
 
-3. **Connecting to the Interface:**
-   Click on "Connect" and use the password `vscode` to access the desktop interface.
+### Monitoring Phase
 
-   ![NoVNC](https://github.com/LCAS/ros2_pkg_template/assets/47870260/71246a4c-fd02-4196-b390-b18804f9cd4e)
+After training, run the monitoring node to detect anomalies:
 
-### Enjoy Development!
+```bash
+ros2 run ros2_svdd_monitor monitor
+```
 
-By leveraging this setup, you can develop on a remote machine with a lightweight desktop interface. Magic! Furthermore, this template package provides very nice ROS2 functionality like syntax highlight and template code generation. 
+The monitoring node will:
+1. Load the trained model
+2. Subscribe to `/imu` and `/cmd_vel` topics
+3. Continuously extract features and detect anomalies
+4. Publish anomaly detection results to:
+   - `/anomaly_detected` (std_msgs/Bool): True if anomaly detected
+   - `/anomaly_score` (std_msgs/Float32): Anomaly score (negative = anomaly)
 
-**All ROS2 packages should go into the `src/` folder. Create them with `ros2 pkg create...`.**
+## Topics
 
-**The devcontainer tries to install all dependencies of the workspace automatically as much as possible, and also tries to build the workspace when it is created, to speed up later colcon builds.**
+### Subscribed Topics
 
-### References
+- `/imu` (sensor_msgs/Imu): IMU sensor data
+- `/cmd_vel` (geometry_msgs/Twist): Velocity commands
 
-1. [ros2-teaching-ws](https://github.com/LCAS/ros2-teaching-ws)
-2. [Get Started with Dev Containers in VS Code](https://youtu.be/b1RavPr_878?si=ADepc_VocOHTXP55)
+### Published Topics (Monitor Node)
+
+- `/anomaly_detected` (std_msgs/Bool): Boolean indicating if anomaly is detected
+- `/anomaly_score` (std_msgs/Float32): Anomaly score from the SVDD model
+
+## Configuration
+
+Configuration parameters are defined in `ros2_svdd_monitor/config.py`:
+
+### Model Parameters
+- `nu`: Upper bound on fraction of outliers (default: 0.1)
+- `kernel`: Kernel type for SVM (default: 'rbf')
+- `gamma`: Kernel coefficient (default: 'auto')
+
+### Feature Parameters
+- `window_size`: Number of samples for feature computation (default: 10)
+- `feature_buffer_size`: Buffer size for streaming features (default: 100)
+
+### Training Parameters
+- `training_duration`: Duration in seconds for training data collection (default: 60.0)
+
+### Monitoring Parameters
+- `anomaly_threshold`: Decision threshold (default: 0.0)
+- `publish_rate`: Rate for publishing results in Hz (default: 1.0)
+
+## Architecture
+
+### Modules
+
+1. **config.py**: Configuration parameters for the SVDD system
+2. **features.py**: Feature extraction from IMU and cmd_vel data
+3. **svdd_model.py**: SVDD model implementation using scikit-learn's OneClassSVM
+4. **train_node.py**: ROS2 node for training the SVDD model
+5. **monitor_node.py**: ROS2 node for real-time anomaly detection
+
+### Feature Extraction
+
+The feature extractor computes statistical features from windowed sensor data:
+- **IMU features**: mean, std, min, max of linear acceleration (x, y, z) and angular velocity (x, y, z)
+- **cmd_vel features**: mean, std, min, max of linear velocity (x, y, z) and angular velocity (x, y, z)
+
+Total: 48 features (6 dimensions × 4 statistics × 2 data sources)
+
+## Testing
+
+Run tests using pytest:
+
+```bash
+cd src/ros2_svdd_monitor
+pytest
+```
+
+Or using colcon:
+
+```bash
+colcon test --packages-select ros2_svdd_monitor
+colcon test-result --verbose
+```
+
+## Development
+
+### Development Environment
+
+This package includes a devcontainer configuration for development with VSCode. See the devcontainer documentation in `.devcontainer/` for setup instructions.
+
+### Code Style
+
+This package follows ROS2 Python style guidelines. Run linters:
+
+```bash
+ament_flake8 ros2_svdd_monitor
+ament_pep257 ros2_svdd_monitor
+```
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- Based on the LCAS ros2_pkg_template
+- Uses scikit-learn for One-Class SVM implementation
+
+## Troubleshooting
+
+### No features collected during training
+
+**Problem**: Training completes but reports "No features collected during training period!"
+
+**Solution**: 
+- Ensure `/imu` and `/cmd_vel` topics are actively publishing data
+- Check topic names match your robot's configuration
+- Verify data is being published at a reasonable rate (> 1 Hz)
+
+### Model file not found
+
+**Problem**: Monitor node reports "Model file not found"
+
+**Solution**: 
+- Run the training node first: `ros2 run ros2_svdd_monitor train`
+- Check that the model was saved successfully
+- Verify the model path in config.py matches your system
+
+### Import errors
+
+**Problem**: "ModuleNotFoundError" for numpy or sklearn
+
+**Solution**: 
+- Install dependencies: `pip install -r requirements.txt`
+- Ensure your ROS2 workspace is properly sourced
+
+## Contributing
+
+Contributions are welcome! Please ensure:
+- Code passes all tests
+- New features include corresponding tests
+- Code follows ROS2 Python style guidelines
