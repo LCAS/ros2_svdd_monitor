@@ -1,0 +1,25 @@
+# SVDD Monitor Configuration
+
+# Sliding window parameters
+window_size: 10  # Number of recent samples to use for feature extraction
+
+# OneClassSVM hyperparameters
+nu: 0.1  # Upper bound on fraction of training errors and lower bound on fraction of support vectors
+gamma: 'scale'  # Kernel coefficient for RBF ('scale' or 'auto' or float value)
+
+# Model paths
+model_path: 'svdd_model.pkl'  # Path to save/load trained model
+scaler_path: 'scaler.pkl'  # Path to save/load feature scaler
+
+# Anomaly detection threshold
+# Predictions from OneClassSVM: 1 for inliers, -1 for outliers
+# Decision function returns signed distance to separating hyperplane
+anomaly_threshold: 0.0  # Threshold for anomaly score (decision function)
+
+# Training parameters
+test_size: 0.2  # Fraction of data to use for validation (optional)
+random_state: 42  # Random seed for reproducibility
+
+# Feature extraction parameters
+# Features include statistics (mean, std, min, max) of cmd_vel and IMU data over the window
+feature_scaling: true  # Whether to scale features before training/inference
