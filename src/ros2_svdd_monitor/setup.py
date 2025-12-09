@@ -11,7 +11,11 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools'],
+    install_requires=[
+        'setuptools',
+        'numpy>=1.21.0',
+        'scikit-learn>=1.0.0',
+    ],
     zip_safe=True,
     maintainer='L-CAS',
     maintainer_email='lcas@lincoln.ac.uk',

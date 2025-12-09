@@ -2,8 +2,11 @@
 
 import pickle
 import numpy as np
+import logging
 from sklearn.svm import OneClassSVM
 from sklearn.preprocessing import StandardScaler
+
+logger = logging.getLogger(__name__)
 
 
 class SVDDModel:
@@ -47,7 +50,7 @@ class SVDDModel:
             self.is_trained = True
             return True
         except Exception as e:
-            print(f"Error training SVDD model: {e}")
+            logger.error(f"Error training SVDD model: {e}")
             return False
             
     def predict(self, features):
@@ -101,7 +104,7 @@ class SVDDModel:
                 pickle.dump(model_data, f)
             return True
         except Exception as e:
-            print(f"Error saving model: {e}")
+            logger.error(f"Error saving model: {e}")
             return False
             
     def load(self, filepath):
@@ -125,5 +128,5 @@ class SVDDModel:
             self.gamma = model_data['gamma']
             return True
         except Exception as e:
-            print(f"Error loading model: {e}")
+            logger.error(f"Error loading model: {e}")
             return False
