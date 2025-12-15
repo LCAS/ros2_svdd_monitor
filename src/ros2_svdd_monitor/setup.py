@@ -32,6 +32,7 @@ setup(
         'console_scripts': [
             'train = ros2_svdd_monitor.train:main',
             'monitor = ros2_svdd_monitor.monitor:main',
+            'rosbag_to_csv = ros2_svdd_monitor.utils.rosbag_to_csv:main',
         ],
     },
 )
