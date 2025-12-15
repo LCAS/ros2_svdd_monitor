@@ -18,6 +18,7 @@ import numpy as np
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Float32
@@ -59,19 +60,28 @@ class SVDDMonitor(Node):
         # Anomaly threshold
         self.anomaly_threshold = self.config.get('anomaly_threshold', 0.0)
         
-        # Subscribers
+        # Subscribers with flexible QoS to handle different publishers
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+        
+        cmd_vel_topic = self.config.get('cmd_vel_topic', '/cmd_vel')
+        imu_topic = self.config.get('imu_topic', '/imu')
+        
         self.cmd_vel_sub = self.create_subscription(
             Twist,
-            '/cmd_vel',
+            cmd_vel_topic,
             self.cmd_vel_callback,
-            10
+            qos_profile
         )
         
         self.imu_sub = self.create_subscription(
             Imu,
-            '/imu',
+            imu_topic,
             self.imu_callback,
-            10
+            qos_profile
         )
         
         # Publishers
@@ -81,11 +91,12 @@ class SVDDMonitor(Node):
         # Statistics
         self.message_count = 0
         self.anomaly_count = 0
+        self.warmup_samples = 50  # Skip first N samples to let windows stabilize
         
         self.get_logger().info("SVDD Monitor started!")
         self.get_logger().info(f"Window size: {self.window_size}")
         self.get_logger().info(f"Anomaly threshold: {self.anomaly_threshold}")
-        self.get_logger().info("Subscribing to /cmd_vel and /imu")
+        self.get_logger().info(f"Subscribing to {cmd_vel_topic} and {imu_topic}")
         self.get_logger().info("Publishing to /svdd/anomaly and /svdd/anomaly_score")
 
     def load_config(self, config_path=None):
@@ -150,6 +161,11 @@ class SVDDMonitor(Node):
         """
         Extract features from current windows and check for anomaly.
         """
+        # Skip anomaly detection during warmup period
+        if self.message_count < self.warmup_samples:
+            self.message_count += 1
+            return
+        
         # Extract features from current windows
         cmd_vel_array = list(self.cmd_vel_window)
         imu_array = list(self.imu_window)
@@ -169,7 +185,8 @@ class SVDDMonitor(Node):
             scale=self.config.get('feature_scaling', True)
         )[0]
         
-        is_anomaly = (prediction == -1) or (score < self.anomaly_threshold)
+        # Use only score threshold for anomaly detection (more reliable than binary prediction)
+        is_anomaly = score < self.anomaly_threshold
         
         # Publish results
         anomaly_msg = Bool()
@@ -193,10 +210,25 @@ class SVDDMonitor(Node):
                 f"anomalies: {self.anomaly_count} ({anomaly_rate:.2f}%)"
             )
         
-        # Log anomalies
+        # Log anomalies with detailed diagnostics
         if is_anomaly:
+            # Log raw sensor data
+            cmd_vel_mean = np.mean(cmd_vel_array, axis=0)
+            imu_mean = np.mean(imu_array, axis=0)
+            
             self.get_logger().warn(
-                f"ANOMALY DETECTED! Score: {score:.4f} (threshold: {self.anomaly_threshold})"
+                f"ANOMALY DETECTED! Score: {score:.6f} (threshold: {self.anomaly_threshold}) Prediction: {prediction}"
+            )
+            self.get_logger().warn(
+                f"  cmd_vel (mean): linear=[{cmd_vel_mean[0]:.4f}, {cmd_vel_mean[1]:.4f}, {cmd_vel_mean[2]:.4f}] "
+                f"angular=[{cmd_vel_mean[3]:.4f}, {cmd_vel_mean[4]:.4f}, {cmd_vel_mean[5]:.4f}]"
+            )
+            self.get_logger().warn(
+                f"  imu (mean): accel=[{imu_mean[0]:.4f}, {imu_mean[1]:.4f}, {imu_mean[2]:.4f}] "
+                f"gyro=[{imu_mean[3]:.4f}, {imu_mean[4]:.4f}, {imu_mean[5]:.4f}]"
+            )
+            self.get_logger().warn(
+                f"  Features: {' '.join([f'{f:.4f}' for f in features[0][:5]])}... (showing first 5 of {len(features[0])})"
             )
 
 

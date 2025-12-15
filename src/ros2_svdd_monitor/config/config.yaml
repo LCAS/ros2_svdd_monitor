@@ -1,5 +1,9 @@
 # SVDD Monitor Configuration
 
+# ROS 2 Topic Names
+cmd_vel_topic: '/gophar_vehicle_controller/cmd_vel'  # Topic for velocity commands
+imu_topic: '/gps_base/yaw'  # Topic for IMU sensor data
+
 # Sliding window parameters
 window_size: 10  # Number of recent samples to use for feature extraction
 
@@ -8,13 +12,13 @@ nu: 0.1  # Upper bound on fraction of training errors and lower bound on fractio
 gamma: 'scale'  # Kernel coefficient for RBF ('scale' or 'auto' or float value)
 
 # Model paths
-model_path: 'svdd_model.pkl'  # Path to save/load trained model
-scaler_path: 'scaler.pkl'  # Path to save/load feature scaler
+model_path: '/workspaces/ros2_svdd_monitor/src/ros2_svdd_monitor/ros2_svdd_monitor/models/svdd_model.pkl'  # Path to save/load trained model
+scaler_path: '/workspaces/ros2_svdd_monitor/src/ros2_svdd_monitor/ros2_svdd_monitor/models/scaler.pkl'  # Path to save/load feature scaler
 
 # Anomaly detection threshold
 # Predictions from OneClassSVM: 1 for inliers, -1 for outliers
 # Decision function returns signed distance to separating hyperplane
-anomaly_threshold: 0.0  # Threshold for anomaly score (decision function)
+anomaly_threshold: -10.0  # Threshold for anomaly score (decision function)
 
 # Training parameters
 test_size: 0.2  # Fraction of data to use for validation (optional)
