@@ -18,7 +18,7 @@ import numpy as np
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Float32
@@ -57,8 +57,41 @@ class SVDDMonitor(Node):
         self.model.load(model_path, scaler_path)
         self.get_logger().info("Model loaded successfully!")
         
-        # Anomaly threshold
+        # Anomaly threshold(s)
         self.anomaly_threshold = self.config.get('anomaly_threshold', 0.0)
+        self.enter_threshold = None
+        self.exit_threshold = None
+
+        # Optionally load auto-threshold saved at training time
+        use_auto = self.config.get('use_auto_threshold', False)
+        if use_auto:
+            try:
+                # Determine threshold file path
+                threshold_path = self.config.get('threshold_path', 'threshold.yaml')
+                if not os.path.isabs(threshold_path):
+                    # Resolve relative to model directory if not absolute
+                    model_dir = os.path.dirname(model_path) if os.path.dirname(model_path) else os.getcwd()
+                    threshold_path = os.path.join(model_dir, threshold_path)
+
+                if os.path.exists(threshold_path):
+                    with open(threshold_path, 'r') as f:
+                        tconf = yaml.safe_load(f)
+                    if isinstance(tconf, dict):
+                        if 'enter_threshold' in tconf and 'exit_threshold' in tconf:
+                            self.enter_threshold = float(tconf['enter_threshold'])
+                            self.exit_threshold = float(tconf['exit_threshold'])
+                            self.get_logger().info(
+                                f"Loaded enter/exit thresholds from {threshold_path}: enter={self.enter_threshold}, exit={self.exit_threshold}"
+                            )
+                        elif 'threshold' in tconf:
+                            self.anomaly_threshold = float(tconf['threshold'])
+                            self.get_logger().info(f"Loaded threshold from {threshold_path}: {self.anomaly_threshold}")
+                        else:
+                            self.get_logger().warn(f"Threshold file missing expected keys: {threshold_path}")
+                else:
+                    self.get_logger().warn(f"Auto-threshold enabled but file not found: {threshold_path}")
+            except Exception as e:
+                self.get_logger().warn(f"Failed to load auto-threshold: {e}")
         
         # Subscribers with flexible QoS to handle different publishers
         qos_profile = QoSProfile(
@@ -84,18 +117,38 @@ class SVDDMonitor(Node):
             qos_profile
         )
         
-        # Publishers
-        self.anomaly_pub = self.create_publisher(Bool, '/svdd/anomaly', 10)
-        self.score_pub = self.create_publisher(Float32, '/svdd/anomaly_score', 10)
+        # Publishers (latched) so last message is delivered to late subscribers
+        pub_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+        pub_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
+        self.anomaly_pub = self.create_publisher(Bool, '/svdd/anomaly', pub_qos)
+        self.score_pub = self.create_publisher(Float32, '/svdd/anomaly_score', pub_qos)
         
         # Statistics
         self.message_count = 0
         self.anomaly_count = 0
         self.warmup_samples = 50  # Skip first N samples to let windows stabilize
+
+        # Smoothing and hysteresis
+        self.smoothing_alpha = float(self.config.get('smoothing_alpha', 0.2))
+        self.hysteresis_abs_margin = float(self.config.get('hysteresis_abs_margin', 0.5))
+        self.hysteresis_ratio = float(self.config.get('hysteresis_ratio', 0.05))
+        self.enter_consecutive = int(self.config.get('enter_consecutive', 2))
+        self.exit_consecutive = int(self.config.get('exit_consecutive', 2))
+        self.smoothed_score = None
+        self.in_anomaly = False
+        self.consec_anom = 0
+        self.consec_norm = 0
         
         self.get_logger().info("SVDD Monitor started!")
         self.get_logger().info(f"Window size: {self.window_size}")
-        self.get_logger().info(f"Anomaly threshold: {self.anomaly_threshold}")
+        if self.enter_threshold is not None and self.exit_threshold is not None:
+            self.get_logger().info(f"Enter/Exit thresholds: {self.enter_threshold} / {self.exit_threshold}")
+        else:
+            self.get_logger().info(f"Anomaly threshold: {self.anomaly_threshold}")
         self.get_logger().info(f"Subscribing to {cmd_vel_topic} and {imu_topic}")
         self.get_logger().info("Publishing to /svdd/anomaly and /svdd/anomaly_score")
 
@@ -136,9 +189,11 @@ class SVDDMonitor(Node):
         ]
         self.cmd_vel_window.append(cmd_vel_data)
         
-        # Check for anomaly if we have enough data
+        # Check for anomaly if we have enough data, otherwise publish defaults
         if len(self.cmd_vel_window) >= self.window_size and len(self.imu_window) >= self.window_size:
             self.check_for_anomaly()
+        else:
+            self.publish_defaults()
 
     def imu_callback(self, msg):
         """Handle incoming IMU messages."""
@@ -153,19 +208,25 @@ class SVDDMonitor(Node):
         ]
         self.imu_window.append(imu_data)
         
-        # Check for anomaly if we have enough data
+        # Check for anomaly if we have enough data, otherwise publish defaults
         if len(self.cmd_vel_window) >= self.window_size and len(self.imu_window) >= self.window_size:
             self.check_for_anomaly()
+        else:
+            self.publish_defaults()
+
+    def publish_defaults(self):
+        """Publish default messages so topics are active before detection starts."""
+        anomaly_msg = Bool()
+        anomaly_msg.data = False
+        self.anomaly_pub.publish(anomaly_msg)
+        score_msg = Float32()
+        score_msg.data = 0.0
+        self.score_pub.publish(score_msg)
 
     def check_for_anomaly(self):
         """
         Extract features from current windows and check for anomaly.
         """
-        # Skip anomaly detection during warmup period
-        if self.message_count < self.warmup_samples:
-            self.message_count += 1
-            return
-        
         # Extract features from current windows
         cmd_vel_array = list(self.cmd_vel_window)
         imu_array = list(self.imu_window)
@@ -174,10 +235,17 @@ class SVDDMonitor(Node):
         features = features.reshape(1, -1)  # Reshape for single prediction
         
         # Get anomaly score (decision function)
-        score = self.model.decision_function(
+        raw_score = self.model.decision_function(
             features,
             scale=self.config.get('feature_scaling', True)
         )[0]
+        # Smooth score with EMA to reduce flicker
+        if self.smoothed_score is None:
+            self.smoothed_score = float(raw_score)
+        else:
+            a = self.smoothing_alpha
+            self.smoothed_score = float(a * raw_score + (1.0 - a) * self.smoothed_score)
+        score = self.smoothed_score
         
         # Predict anomaly
         prediction = self.model.predict(
@@ -185,8 +253,47 @@ class SVDDMonitor(Node):
             scale=self.config.get('feature_scaling', True)
         )[0]
         
-        # Use only score threshold for anomaly detection (more reliable than binary prediction)
-        is_anomaly = score < self.anomaly_threshold
+        # During warmup, publish but never flag anomaly
+        if self.message_count < self.warmup_samples:
+            is_anomaly = False
+            self.consec_anom = 0
+            self.consec_norm = 0
+        else:
+            # Hysteresis thresholds
+            if self.enter_threshold is not None and self.exit_threshold is not None:
+                enter_threshold = self.enter_threshold
+                exit_threshold = self.exit_threshold
+            else:
+                # Symmetric margins around single threshold, clamped by abs_max
+                base = self.anomaly_threshold
+                margin = max(self.hysteresis_abs_margin, abs(base) * self.hysteresis_ratio)
+                max_margin = float(self.config.get('hysteresis_abs_max', float('inf')))
+                if np.isfinite(max_margin):
+                    margin = min(margin, max_margin)
+                enter_threshold = base - margin
+                exit_threshold = base + margin
+
+            # Update consecutive counters based on score relative to thresholds
+            if not self.in_anomaly:
+                # Candidate to enter anomaly when below enter_threshold
+                if score < enter_threshold:
+                    self.consec_anom += 1
+                else:
+                    self.consec_anom = 0
+                if self.consec_anom >= self.enter_consecutive:
+                    self.in_anomaly = True
+                    self.consec_anom = 0
+            else:
+                # Candidate to exit anomaly when above exit_threshold
+                if score > exit_threshold:
+                    self.consec_norm += 1
+                else:
+                    self.consec_norm = 0
+                if self.consec_norm >= self.exit_consecutive:
+                    self.in_anomaly = False
+                    self.consec_norm = 0
+
+            is_anomaly = self.in_anomaly
         
         # Publish results
         anomaly_msg = Bool()
@@ -199,7 +306,7 @@ class SVDDMonitor(Node):
         
         # Update statistics
         self.message_count += 1
-        if is_anomaly:
+        if (self.message_count >= self.warmup_samples) and is_anomaly:
             self.anomaly_count += 1
         
         # Log periodically

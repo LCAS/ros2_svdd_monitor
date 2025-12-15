@@ -112,10 +112,19 @@ class SVDDModel:
         """
         if not self.is_fitted:
             raise RuntimeError("Model must be fitted before saving")
+        
+        # Create directory if it doesn't exist
+        import os
+        model_dir = os.path.dirname(model_path)
+        if model_dir:
+            os.makedirs(model_dir, exist_ok=True)
             
         joblib.dump(self.model, model_path)
         
         if scaler_path:
+            scaler_dir = os.path.dirname(scaler_path)
+            if scaler_dir:
+                os.makedirs(scaler_dir, exist_ok=True)
             joblib.dump(self.scaler, scaler_path)
         
         print(f"Model saved to {model_path}")

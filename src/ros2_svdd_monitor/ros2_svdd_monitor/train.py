@@ -131,6 +131,22 @@ def main():
     print(f"  Total samples: {len(predictions)}")
     print(f"  Outliers detected: {n_outliers} ({outlier_ratio*100:.2f}%)")
     print(f"  Inliers: {len(predictions) - n_outliers} ({(1-outlier_ratio)*100:.2f}%)")
+
+    # Compute decision function scores on training data and suggest a threshold
+    scores = model.decision_function(features, scale=config.get('feature_scaling', True))
+    score_mean = float(np.mean(scores))
+    score_std = float(np.std(scores))
+    score_min = float(np.min(scores))
+    score_max = float(np.max(scores))
+
+    enter_pct = float(config.get('enter_threshold_percentile', 1.0))
+    exit_pct = float(config.get('exit_threshold_percentile', max(enter_pct, 5.0)))
+    enter_threshold = float(np.percentile(scores, enter_pct))
+    exit_threshold = float(np.percentile(scores, exit_pct))
+    print(f"\nDecision function stats on training set:")
+    print(f"  mean={score_mean:.3f}, std={score_std:.3f}, min={score_min:.3f}, max={score_max:.3f}")
+    print(f"  Recommended enter threshold @ p{enter_pct:.1f} = {enter_threshold:.3f}")
+    print(f"  Recommended exit  threshold @ p{exit_pct:.1f} = {exit_threshold:.3f}")
     
     # Save model and scaler
     os.makedirs(args.output_dir, exist_ok=True)
@@ -140,12 +156,40 @@ def main():
     
     print(f"\nSaving model to {model_path}...")
     model.save(model_path, scaler_path)
+
+    # Save recommended threshold alongside the model for the monitor to consume
+    try:
+        import yaml
+        threshold_path = os.path.join(args.output_dir, config.get('threshold_path', 'threshold.yaml'))
+        threshold_payload = {
+            'threshold': enter_threshold,  # backward compatibility
+            'enter_threshold': enter_threshold,
+            'exit_threshold': exit_threshold,
+            'enter_percentile': enter_pct,
+            'exit_percentile': exit_pct,
+            'score_stats': {
+                'mean': score_mean,
+                'std': score_std,
+                'min': score_min,
+                'max': score_max,
+            },
+            'nu': config['nu'],
+            'gamma': config['gamma'],
+            'feature_scaling': bool(config.get('feature_scaling', True)),
+            'window_size': int(config['window_size']),
+        }
+        with open(threshold_path, 'w') as f:
+            yaml.safe_dump(threshold_payload, f)
+        print(f"Saved threshold to: {threshold_path}")
+    except Exception as e:
+        print(f"Warning: failed to save threshold: {e}")
     
     print("\n" + "="*60)
     print("Training complete!")
     print("="*60)
     print(f"Model saved to: {model_path}")
     print(f"Scaler saved to: {scaler_path}")
+    print(f"Threshold saved to: {os.path.join(args.output_dir, config.get('threshold_path', 'threshold.yaml'))}")
     print("\nYou can now run the monitor with:")
     print(f"  ros2 run ros2_svdd_monitor monitor")
 
