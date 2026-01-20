@@ -22,6 +22,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Float32
+from ament_index_python.packages import get_package_share_directory
 
 from ros2_svdd_monitor.svdd_model import SVDDModel
 from ros2_svdd_monitor.features import extract_window_features
@@ -45,8 +46,8 @@ class SVDDMonitor(Node):
         
         # Load trained model
         self.model = SVDDModel()
-        model_path = self.config['model_path']
-        scaler_path = self.config['scaler_path']
+        model_path = os.path.expanduser(self.config['model_path'])
+        scaler_path = os.path.expanduser(self.config['scaler_path'])
         
         if not os.path.exists(model_path):
             self.get_logger().error(f"Model file not found: {model_path}")
@@ -161,6 +162,13 @@ class SVDDMonitor(Node):
                 '../config/config.yaml',
                 os.path.join(os.path.dirname(__file__), '../config/config.yaml'),
             ]
+            
+            # Add the installed share directory location
+            try:
+                share_dir = get_package_share_directory('ros2_svdd_monitor')
+                possible_paths.insert(0, os.path.join(share_dir, 'config/config.yaml'))
+            except Exception:
+                pass
             
             for path in possible_paths:
                 if os.path.exists(path):

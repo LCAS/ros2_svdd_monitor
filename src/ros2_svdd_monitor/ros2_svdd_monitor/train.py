@@ -151,8 +151,8 @@ def main():
     # Save model and scaler
     os.makedirs(args.output_dir, exist_ok=True)
     
-    model_path = os.path.join(args.output_dir, config['model_path'])
-    scaler_path = os.path.join(args.output_dir, config['scaler_path'])
+    model_path = os.path.join(args.output_dir, os.path.basename(os.path.expanduser(config['model_path'])))
+    scaler_path = os.path.join(args.output_dir, os.path.basename(os.path.expanduser(config['scaler_path'])))
     
     print(f"\nSaving model to {model_path}...")
     model.save(model_path, scaler_path)

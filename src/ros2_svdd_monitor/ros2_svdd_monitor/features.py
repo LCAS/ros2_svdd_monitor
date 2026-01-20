@@ -79,52 +79,78 @@ def extract_window_features(cmd_vel_window, imu_window):
         cmd_vel_array = np.array(cmd_vel_window)
         imu_array = np.array(imu_window)
         
-        # Expected: forward cmd_vel (linear.x) should correlate with forward accel (accel.x)
+        # Align sequences: use most recent overlapping samples when lengths differ
         cmd_linear = cmd_vel_array[:, 0]
         imu_accel = imu_array[:, 0]
-        
-        # Compute correlation if we have variance
-        if np.std(cmd_linear) > 1e-6 and np.std(imu_accel) > 1e-6:
-            correlation = np.corrcoef(cmd_linear, imu_accel)[0, 1]
-            if np.isnan(correlation):
+
+        min_len = min(len(cmd_linear), len(imu_accel))
+        if min_len >= 2:
+            cmd_seg = cmd_linear[-min_len:]
+            imu_seg = imu_accel[-min_len:]
+            if np.std(cmd_seg) > 1e-6 and np.std(imu_seg) > 1e-6:
+                correlation = np.corrcoef(cmd_seg, imu_seg)[0, 1]
+                if np.isnan(correlation):
+                    correlation = 0.0
+            else:
                 correlation = 0.0
         else:
             correlation = 0.0
-        
+
         features.append(correlation)
-        
-        # Expected: angular cmd_vel (angular.z) should correlate with gyro (gyro.z)
+
+        # Angular correlation (z)
         cmd_angular = cmd_vel_array[:, 5]
         imu_gyro = imu_array[:, 5]
-        
-        if np.std(cmd_angular) > 1e-6 and np.std(imu_gyro) > 1e-6:
-            correlation = np.corrcoef(cmd_angular, imu_gyro)[0, 1]
-            if np.isnan(correlation):
+
+        min_len = min(len(cmd_angular), len(imu_gyro))
+        if min_len >= 2:
+            cmd_seg = cmd_angular[-min_len:]
+            imu_seg = imu_gyro[-min_len:]
+            if np.std(cmd_seg) > 1e-6 and np.std(imu_seg) > 1e-6:
+                correlation = np.corrcoef(cmd_seg, imu_seg)[0, 1]
+                if np.isnan(correlation):
+                    correlation = 0.0
+            else:
                 correlation = 0.0
         else:
             correlation = 0.0
-        
+
         features.append(correlation)
-        
+
         # Magnitude ratios (should be relatively stable for normal operation)
-        mean_cmd_linear = np.mean(np.abs(cmd_linear))
-        mean_imu_accel = np.mean(np.abs(imu_accel))
-        
+        # Use overlapping segments consistent with correlation computation
+        min_len = min(len(cmd_linear), len(imu_accel))
+        if min_len >= 1:
+            cmd_seg = np.abs(cmd_linear[-min_len:])
+            imu_seg = np.abs(imu_accel[-min_len:])
+            mean_cmd_linear = np.mean(cmd_seg)
+            mean_imu_accel = np.mean(imu_seg)
+        else:
+            mean_cmd_linear = 0.0
+            mean_imu_accel = 0.0
+
         if mean_cmd_linear > 1e-6:
             accel_ratio = mean_imu_accel / mean_cmd_linear
         else:
             accel_ratio = 0.0
-        
+
         features.append(accel_ratio)
-        
-        mean_cmd_angular = np.mean(np.abs(cmd_angular))
-        mean_imu_gyro = np.mean(np.abs(imu_gyro))
-        
+
+        min_len = min(len(cmd_angular), len(imu_gyro))
+        if min_len >= 1:
+            cmd_seg = np.abs(cmd_angular[-min_len:])
+            imu_seg = np.abs(imu_gyro[-min_len:])
+            mean_cmd_angular = np.mean(cmd_seg)
+            mean_imu_gyro = np.mean(imu_seg)
+        else:
+            mean_cmd_angular = 0.0
+            mean_imu_gyro = 0.0
+
         if mean_cmd_angular > 1e-6:
             gyro_ratio = mean_imu_gyro / mean_cmd_angular
         else:
             gyro_ratio = 0.0
-        
+
         features.append(gyro_ratio)
     else:
         # If missing data, use zeros for cross-features
