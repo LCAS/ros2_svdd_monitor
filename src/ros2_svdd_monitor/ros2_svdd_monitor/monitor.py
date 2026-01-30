@@ -21,11 +21,39 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu
+from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool, Float32
 from ament_index_python.packages import get_package_share_directory
 
 from ros2_svdd_monitor.svdd_model import SVDDModel
-from ros2_svdd_monitor.features import extract_window_features
+import inspect
+
+def _load_local_features():
+    import importlib.util
+    local_features_path = os.path.join(os.path.dirname(__file__), 'features.py')
+    spec = importlib.util.spec_from_file_location('local_features', local_features_path)
+    local_features = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(local_features)
+    return local_features.extract_window_features
+
+try:
+    from ros2_svdd_monitor.features import extract_window_features
+    # Verify signature supports optional odom_window (3rd arg)
+    try:
+        sig = inspect.signature(extract_window_features)
+        if len(sig.parameters) < 2:
+            # unexpected signature, load local implementation
+            extract_window_features = _load_local_features()
+        else:
+            # if it only accepts 2 params, replace with local implementation
+            if len(sig.parameters) == 2:
+                extract_window_features = _load_local_features()
+    except Exception:
+        # If signature inspection fails, prefer local implementation
+        extract_window_features = _load_local_features()
+except Exception:
+    # Fallback: load local features.py to avoid using an installed/stale package
+    extract_window_features = _load_local_features()
 
 
 class SVDDMonitor(Node):
@@ -43,6 +71,7 @@ class SVDDMonitor(Node):
         self.window_size = self.config['window_size']
         self.cmd_vel_window = deque(maxlen=self.window_size)
         self.imu_window = deque(maxlen=self.window_size)
+        self.odom_window = deque(maxlen=self.window_size)
         
         # Load trained model
         self.model = SVDDModel()
@@ -103,6 +132,7 @@ class SVDDMonitor(Node):
         
         cmd_vel_topic = self.config.get('cmd_vel_topic', '/cmd_vel')
         imu_topic = self.config.get('imu_topic', '/imu')
+        odom_topic = self.config.get('odom_topic', '/odom')
         
         self.cmd_vel_sub = self.create_subscription(
             Twist,
@@ -115,6 +145,13 @@ class SVDDMonitor(Node):
             Imu,
             imu_topic,
             self.imu_callback,
+            qos_profile
+        )
+
+        self.odom_sub = self.create_subscription(
+            Odometry,
+            odom_topic,
+            self.odom_callback,
             qos_profile
         )
         
@@ -151,11 +188,40 @@ class SVDDMonitor(Node):
         else:
             self.get_logger().info(f"Anomaly threshold: {self.anomaly_threshold}")
         self.get_logger().info(f"Subscribing to {cmd_vel_topic} and {imu_topic}")
+        self.get_logger().info(f"Subscribing to odom: {odom_topic}")
         self.get_logger().info("Publishing to /svdd/anomaly and /svdd/anomaly_score")
 
     def load_config(self, config_path=None):
         """Load configuration from YAML file."""
-        if config_path is None:
+        # If a config_path was provided but doesn't exist, attempt sensible fallbacks
+        if config_path is not None:
+            config_path = os.path.expanduser(config_path)
+            if not os.path.exists(config_path):
+                candidates = [
+                    config_path,
+                    os.path.join(os.path.dirname(__file__), '..', config_path),
+                    os.path.join(os.path.dirname(__file__), '..', os.path.basename(config_path)),
+                    os.path.join(os.getcwd(), config_path),
+                ]
+                try:
+                    share_dir = get_package_share_directory('ros2_svdd_monitor')
+                    candidates.insert(0, os.path.join(share_dir, 'config', os.path.basename(config_path)))
+                except Exception:
+                    pass
+
+                found = None
+                for path in candidates:
+                    p = os.path.normpath(path)
+                    if os.path.exists(p):
+                        found = p
+                        break
+
+                if found is None:
+                    self.get_logger().error(f"Config file not found (tried): {candidates}")
+                    sys.exit(1)
+
+                config_path = found
+        else:
             # Search for config in common locations
             possible_paths = [
                 'config/config.yaml',
@@ -174,7 +240,7 @@ class SVDDMonitor(Node):
                 if os.path.exists(path):
                     config_path = path
                     break
-            
+
             if config_path is None:
                 self.get_logger().error("Could not find config.yaml")
                 sys.exit(1)
@@ -222,6 +288,23 @@ class SVDDMonitor(Node):
         else:
             self.publish_defaults()
 
+    def odom_callback(self, msg):
+        """Handle incoming Odometry messages."""
+        odom_data = [
+            msg.twist.twist.linear.x,
+            msg.twist.twist.linear.y,
+            msg.twist.twist.linear.z,
+            msg.twist.twist.angular.x,
+            msg.twist.twist.angular.y,
+            msg.twist.twist.angular.z,
+        ]
+        self.odom_window.append(odom_data)
+
+        if len(self.cmd_vel_window) >= self.window_size and len(self.imu_window) >= self.window_size and len(self.odom_window) >= self.window_size:
+            self.check_for_anomaly()
+        else:
+            self.publish_defaults()
+
     def publish_defaults(self):
         """Publish default messages so topics are active before detection starts."""
         anomaly_msg = Bool()
@@ -239,7 +322,7 @@ class SVDDMonitor(Node):
         cmd_vel_array = list(self.cmd_vel_window)
         imu_array = list(self.imu_window)
         
-        features = extract_window_features(cmd_vel_array, imu_array)
+        features = extract_window_features(cmd_vel_array, imu_array, list(self.odom_window))
         features = features.reshape(1, -1)  # Reshape for single prediction
         
         # Get anomaly score (decision function)

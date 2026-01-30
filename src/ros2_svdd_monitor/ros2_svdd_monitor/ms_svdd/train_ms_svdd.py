@@ -49,12 +49,21 @@ def main():
     p.add_argument('--epochs', type=int, default=50)
     p.add_argument('--batch-size', type=int, default=64)
     p.add_argument('--lr', type=float, default=1e-3)
+    p.add_argument('--device', default=None, help="Device to use: 'cpu' or 'cuda' (default: auto)")
     args = p.parse_args()
 
     X = load_features(args.features)
     print(f'Loaded features shape: {X.shape}')
 
-    wrapper = MSVDDWrapper(input_dim=X.shape[1], embed_dim=32)
+    # Respect requested device if provided
+    device = None
+    if args.device is not None:
+        try:
+            device = torch.device(args.device)
+        except Exception:
+            device = None
+
+    wrapper = MSVDDWrapper(input_dim=X.shape[1], embed_dim=32, device=device)
     wrapper.train(X,
               epochs=args.epochs,
               batch_size=args.batch_size,

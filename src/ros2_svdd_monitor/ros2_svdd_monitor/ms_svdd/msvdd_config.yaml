@@ -1,0 +1,3 @@
+model_path: /home/jcox/ros2_ws/src/ros2_svdd_monitor/src/ros2_svdd_monitor/ros2_svdd_monitor/ms_svdd/msvdd_model.pt
+window_size: 10
+threshold: 0.5

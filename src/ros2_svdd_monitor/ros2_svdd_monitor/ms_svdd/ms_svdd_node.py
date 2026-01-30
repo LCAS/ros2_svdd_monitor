@@ -27,14 +27,20 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu
+from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool, Float32
 
 try:
-    from ros2_svdd_monitor.ms_svdd_model import MSVDDWrapper
+    from ros2_svdd_monitor.ms_svdd.ms_svdd_model import MSVDDWrapper
     from ros2_svdd_monitor.features import extract_window_features
 except Exception:
     # Fallback when running the script directly from package folder
     from ms_svdd_model import MSVDDWrapper
+    import sys
+    import os
+    parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
     from features import extract_window_features
 
 
@@ -57,6 +63,7 @@ class MSVDDNode(Node):
         self.window_size = int(self.config.get('window_size', 10))
         self.cmd_vel_window = deque(maxlen=self.window_size)
         self.imu_window = deque(maxlen=self.window_size)
+        self.odom_window = deque(maxlen=self.window_size)
 
         model_path = os.path.expanduser(self.config.get('model_path'))
         if not os.path.exists(model_path):
@@ -65,7 +72,30 @@ class MSVDDNode(Node):
 
         self.get_logger().info(f"Loading MSVDD model from {model_path}...")
         # we will lazy-init wrapper with input_dim inferred from scaler
-        self.wrapper = MSVDDWrapper(input_dim=1)
+        # Auto-detect compatible device
+        import torch
+        device = torch.device('cpu')
+        if torch.cuda.is_available():
+            try:
+                # Check CUDA compute capability
+                capability = torch.cuda.get_device_capability()
+                major, minor = capability
+                # PyTorch typically requires compute capability 7.0+
+                if major < 7:
+                    self.get_logger().warn(f'CUDA device has compute capability {major}.{minor}, but PyTorch requires 7.0+. Using CPU instead.')
+                else:
+                    # Test if CUDA actually works by attempting a simple operation
+                    test_tensor = torch.zeros(1, device='cuda')
+                    test_result = test_tensor + 1
+                    _ = test_result.cpu()  # Force synchronization
+                    device = torch.device('cuda')
+                    self.get_logger().info('Using CUDA GPU for inference')
+            except Exception as e:
+                self.get_logger().warn(f'CUDA available but not compatible: {e}. Using CPU instead.')
+        else:
+            self.get_logger().info('CUDA not available. Using CPU for inference')
+        
+        self.wrapper = MSVDDWrapper(input_dim=1, device=device)
         self.wrapper.load(model_path)
         self.get_logger().info('Model loaded')
 
@@ -76,6 +106,7 @@ class MSVDDNode(Node):
 
         self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_cb, 10)
         self.create_subscription(Imu, '/imu', self.imu_cb, 10)
+        self.create_subscription(Odometry, '/odom', self.odom_cb, 10)
 
     def cmd_vel_cb(self, msg: Twist):
         # pack linear.x and angular.z into 6-element vector expected by features
@@ -89,12 +120,18 @@ class MSVDDNode(Node):
         self.imu_window.append(imu)
         self.try_analyze()
 
+    def odom_cb(self, msg: Odometry):
+        odom = [msg.twist.twist.linear.x, msg.twist.twist.linear.y, msg.twist.twist.linear.z,
+                msg.twist.twist.angular.x, msg.twist.twist.angular.y, msg.twist.twist.angular.z]
+        self.odom_window.append(odom)
+        self.try_analyze()
+
     def try_analyze(self):
         # Only run when we have at least one sample in each
-        if len(self.cmd_vel_window) == 0 or len(self.imu_window) == 0:
+        if len(self.cmd_vel_window) == 0 or len(self.imu_window) == 0 or len(self.odom_window) == 0:
             return
 
-        feat = extract_window_features(list(self.cmd_vel_window), list(self.imu_window))
+        feat = extract_window_features(list(self.cmd_vel_window), list(self.imu_window), list(self.odom_window))
         try:
             score = float(self.wrapper.score_samples(feat.reshape(1, -1))[0])
         except Exception as e:

@@ -8,7 +8,7 @@ Features capture the relationship between commanded velocity and expected IMU re
 import numpy as np
 
 
-def extract_window_features(cmd_vel_window, imu_window):
+def extract_window_features(cmd_vel_window, imu_window, odom_window=None):
     """
     Extract statistical features from cmd_vel and IMU sliding windows.
     
@@ -72,6 +72,27 @@ def extract_window_features(cmd_vel_window, imu_window):
         ])
     else:
         # If no IMU data, use zeros
+        features.extend([0.0] * 8)
+
+    # Extract ODOM data (optional)
+    if odom_window is not None and len(odom_window) > 0:
+        odom_array = np.array(odom_window)
+        # Statistics for odom linear velocity
+        features.extend([
+            np.mean(odom_array[:, 0]),
+            np.std(odom_array[:, 0]),
+            np.min(odom_array[:, 0]),
+            np.max(odom_array[:, 0]),
+        ])
+        # Statistics for odom angular.z
+        features.extend([
+            np.mean(odom_array[:, 5]),
+            np.std(odom_array[:, 5]),
+            np.min(odom_array[:, 5]),
+            np.max(odom_array[:, 5]),
+        ])
+    else:
+        # If no odom data, use zeros
         features.extend([0.0] * 8)
     
     # Cross-features: relationship between cmd_vel and IMU
@@ -155,6 +176,59 @@ def extract_window_features(cmd_vel_window, imu_window):
     else:
         # If missing data, use zeros for cross-features
         features.extend([0.0] * 4)
+
+    # Cross-features involving odom (if available)
+    if odom_window is not None and len(odom_window) > 0 and len(imu_window) > 0:
+        odom_array = np.array(odom_window)
+        # linear correlation: odom linear.x vs imu accel.x
+        odom_linear = odom_array[:, 0]
+        imu_accel = imu_array[:, 0]
+        min_len = min(len(odom_linear), len(imu_accel))
+        if min_len >= 2:
+            oseg = odom_linear[-min_len:]
+            iseg = imu_accel[-min_len:]
+            if np.std(oseg) > 1e-6 and np.std(iseg) > 1e-6:
+                correlation = np.corrcoef(oseg, iseg)[0, 1]
+                if np.isnan(correlation):
+                    correlation = 0.0
+            else:
+                correlation = 0.0
+        else:
+            correlation = 0.0
+        features.append(correlation)
+
+        # angular correlation: odom angular.z vs imu gyro.z
+        odom_angular = odom_array[:, 5]
+        imu_gyro = imu_array[:, 5]
+        min_len = min(len(odom_angular), len(imu_gyro))
+        if min_len >= 2:
+            oseg = odom_angular[-min_len:]
+            iseg = imu_gyro[-min_len:]
+            if np.std(oseg) > 1e-6 and np.std(iseg) > 1e-6:
+                correlation = np.corrcoef(oseg, iseg)[0, 1]
+                if np.isnan(correlation):
+                    correlation = 0.0
+            else:
+                correlation = 0.0
+        else:
+            correlation = 0.0
+        features.append(correlation)
+
+        # ratio odom linear -> imu accel
+        min_len = min(len(odom_linear), len(imu_accel))
+        if min_len >= 1:
+            oseg = np.abs(odom_linear[-min_len:])
+            iseg = np.abs(imu_accel[-min_len:])
+            mean_odom_linear = np.mean(oseg)
+            mean_imu_accel = np.mean(iseg)
+        else:
+            mean_odom_linear = 0.0
+            mean_imu_accel = 0.0
+        accel_ratio = (mean_imu_accel / mean_odom_linear) if mean_odom_linear > 1e-6 else 0.0
+        features.append(accel_ratio)
+    else:
+        # fill odom cross-features with zeros
+        features.extend([0.0] * 4)
     
     return np.array(features)
 
@@ -180,6 +254,10 @@ def extract_features_from_dataframe(df, window_size=10):
     # Expected columns for IMU
     imu_cols = ['imu_accel_x', 'imu_accel_y', 'imu_accel_z',
                 'imu_gyro_x', 'imu_gyro_y', 'imu_gyro_z']
+
+    # Optional odom columns
+    odom_cols = ['odom_linear_x', 'odom_linear_y', 'odom_linear_z',
+                 'odom_angular_x', 'odom_angular_y', 'odom_angular_z']
     
     # Check if columns exist, if not use simplified names
     if not all(col in df.columns for col in cmd_vel_cols):
@@ -191,11 +269,26 @@ def extract_features_from_dataframe(df, window_size=10):
         # Try simplified column names
         imu_cols = ['accel_x', 'accel_y', 'accel_z',
                    'gyro_x', 'gyro_y', 'gyro_z']
+
+    # Check odom columns, try simplified names if needed
+    if not all(col in df.columns for col in odom_cols):
+        odom_cols = ['odom_linear_x', 'odom_linear_y', 'odom_linear_z',
+                     'odom_angular_x', 'odom_angular_y', 'odom_angular_z']
+        if not all(col in df.columns for col in odom_cols):
+            # try alternative names used by some recorders
+            odom_cols = ['twist_linear_x', 'twist_linear_y', 'twist_linear_z',
+                         'twist_angular_x', 'twist_angular_y', 'twist_angular_z']
     
     # Extract data
     try:
         cmd_vel_data = df[cmd_vel_cols].values
         imu_data = df[imu_cols].values
+        # odom may be optional
+        odom_present = all(col in df.columns for col in odom_cols)
+        if odom_present:
+            odom_data = df[odom_cols].values
+        else:
+            odom_data = None
     except KeyError as e:
         raise ValueError(f"Missing required columns in DataFrame: {e}")
     
@@ -206,8 +299,9 @@ def extract_features_from_dataframe(df, window_size=10):
         
         cmd_vel_window = cmd_vel_data[start_idx:end_idx]
         imu_window = imu_data[start_idx:end_idx]
-        
-        features = extract_window_features(cmd_vel_window, imu_window)
+        odom_window = odom_data[start_idx:end_idx] if odom_data is not None else None
+
+        features = extract_window_features(cmd_vel_window, imu_window, odom_window)
         features_list.append(features)
     
     return np.array(features_list)
@@ -246,5 +340,19 @@ def get_feature_names():
         'cmd_angular_to_imu_gyro_correlation',
         'imu_accel_to_cmd_linear_ratio',
         'imu_gyro_to_cmd_angular_ratio',
+        # Odom features
+        'odom_linear_x_mean',
+        'odom_linear_x_std',
+        'odom_linear_x_min',
+        'odom_linear_x_max',
+        'odom_angular_z_mean',
+        'odom_angular_z_std',
+        'odom_angular_z_min',
+        'odom_angular_z_max',
+        # Odom cross-features
+        'odom_linear_to_imu_accel_correlation',
+        'odom_angular_to_imu_gyro_correlation',
+        'imu_accel_to_odom_linear_ratio',
+        'imu_accel_to_odom_linear_ratio_alt',
     ]
     return feature_names

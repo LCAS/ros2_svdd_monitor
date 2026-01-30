@@ -17,6 +17,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu
+from nav_msgs.msg import Odometry
 
 # Ensure local package import works when running this script directly.
 _here = os.path.abspath(os.path.dirname(__file__))
@@ -24,11 +25,24 @@ _pkg_parent = os.path.dirname(_here)  # .../src/ros2_svdd_monitor
 _src_root = os.path.dirname(_pkg_parent)
 if _src_root not in sys.path:
     sys.path.insert(0, _src_root)
-
+# Prefer loading the local `features.py` directly to avoid stale installed copies.
 try:
-    from ros2_svdd_monitor.features import extract_window_features
+    import importlib.util
+    features_path = os.path.join(_here, 'features.py')
+    if os.path.exists(features_path):
+        spec = importlib.util.spec_from_file_location('local_features', features_path)
+        local_features = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(local_features)
+        extract_window_features = getattr(local_features, 'extract_window_features')
+    else:
+        # Fallback to package import
+        from ros2_svdd_monitor.features import extract_window_features
 except Exception:
-    from features import extract_window_features
+    # Last-resort fallback (may import installed package)
+    try:
+        from ros2_svdd_monitor.features import extract_window_features
+    except Exception:
+        from features import extract_window_features
 
 
 class Recorder(Node):
@@ -38,8 +52,11 @@ class Recorder(Node):
         self.cmd_vals = []
         self.imu_times = []
         self.imu_vals = []
+        self.odom_times = []
+        self.odom_vals = []
         self.sub_cmd = self.create_subscription(Twist, '/cmd_vel', self.cb_cmd, 10)
         self.sub_imu = self.create_subscription(Imu, '/imu', self.cb_imu, 10)
+        self.sub_odom = self.create_subscription(Odometry, '/odom', self.cb_odom, 10)
 
     def cb_cmd(self, msg: Twist):
         t = self.get_clock().now().nanoseconds * 1e-9
@@ -54,6 +71,14 @@ class Recorder(Node):
              msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z]
         self.imu_times.append(t)
         self.imu_vals.append(v)
+
+    def cb_odom(self, msg: Odometry):
+        t = self.get_clock().now().nanoseconds * 1e-9
+        # store same layout as cmd_vel: linear.x,y,z and angular.x,y,z from twist
+        v = [msg.twist.twist.linear.x, msg.twist.twist.linear.y, msg.twist.twist.linear.z,
+             msg.twist.twist.angular.x, msg.twist.twist.angular.y, msg.twist.twist.angular.z]
+        self.odom_times.append(t)
+        self.odom_vals.append(v)
 
 
 def align_and_extract(rec: Recorder, duration, rate, window_size):
@@ -80,20 +105,26 @@ def align_and_extract(rec: Recorder, duration, rate, window_size):
 
     cmd_aligned = []
     imu_aligned = []
+    odom_aligned = []
 
     for t in t_grid:
         c = last_value(rec.cmd_times, rec.cmd_vals, t)
         m = last_value(rec.imu_times, rec.imu_vals, t)
+        o = last_value(rec.odom_times, rec.odom_vals, t)
         # if no value yet, use zeros
         if c is None:
             c = [0.0] * 6
         if m is None:
             m = [0.0] * 6
+        if o is None:
+            o = [0.0] * 6
         cmd_aligned.append(c)
         imu_aligned.append(m)
+        odom_aligned.append(o)
 
     cmd_arr = np.array(cmd_aligned)
     imu_arr = np.array(imu_aligned)
+    odom_arr = np.array(odom_aligned)
 
     # sliding-window extraction
     features = []
@@ -101,7 +132,8 @@ def align_and_extract(rec: Recorder, duration, rate, window_size):
         start_idx = max(0, i - window_size + 1)
         cmd_win = cmd_arr[start_idx:i+1]
         imu_win = imu_arr[start_idx:i+1]
-        f = extract_window_features(cmd_win, imu_win)
+        odom_win = odom_arr[start_idx:i+1]
+        f = extract_window_features(cmd_win, imu_win, odom_win)
         features.append(f)
 
     X = np.array(features)

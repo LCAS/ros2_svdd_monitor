@@ -3,6 +3,7 @@
 # ROS 2 Topic Names
 cmd_vel_topic: '/cmd_vel'  # Topic for velocity commands
 imu_topic: '/imu'  # Topic for IMU sensor data
+odom_topic: '/odom'  # Topic for odometry (nav_msgs/Odometry)
 
 # Sliding window parameters
 window_size: 10  # Number of recent samples to use for feature extraction
@@ -12,8 +13,8 @@ nu: 0.2  # Upper bound on fraction of training errors and lower bound on fractio
 gamma: 'scale'  # Kernel coefficient for RBF ('scale' or 'auto' or float value)
 
 # Model paths
-model_path: '~/ros2_ws/src/ros2_svdd_monitor/src/ros2_svdd_monitor/models/svdd_model.pkl'  # Path to save/load trained model
-scaler_path: '~/ros2_ws/src/ros2_svdd_monitor/src/ros2_svdd_monitor/models/scaler.pkl'  # Path to save/load feature scaler
+model_path: '~/ros2_ws/src/ros2_svdd_monitor/src/ros2_svdd_monitor/ros2_svdd_monitor/models/svm_model.pkl'  # Path to save/load trained model (existing OneClassSVM)
+scaler_path: '~/ros2_ws/src/ros2_svdd_monitor/src/ros2_svdd_monitor/ros2_svdd_monitor/models/svm_scaler.pkl'  # Path to save/load feature scaler
 
 # Anomaly detection threshold
 # Predictions from OneClassSVM: 1 for inliers, -1 for outliers
@@ -23,7 +24,7 @@ use_auto_threshold: true
 enter_threshold_percentile: 1.0  # Percentile for anomaly entry threshold (training time)
 exit_threshold_percentile: 5.0   # Percentile for anomaly exit threshold (training time)
 threshold_path: 'threshold.yaml'  # Where training writes the threshold (relative to model directory)
-anomaly_threshold: -100.0      # Fallback threshold if auto-threshold is not available
+anomaly_threshold: -8.0      # Fallback threshold if auto-threshold is not available
 
 # Training parameters
 test_size: 0.2  # Fraction of data to use for validation (optional)
@@ -32,6 +33,7 @@ random_state: 42  # Random seed for reproducibility
 # Feature extraction parameters
 # Features include statistics (mean, std, min, max) of cmd_vel and IMU data over the window
 feature_scaling: true  # Whether to scale features before training/inference
+include_odom_features: true  # Whether to include odom-derived features (set false if odom not available)
 
 # Runtime smoothing and hysteresis to reduce flicker
 smoothing_alpha: 0.2            # 0..1, higher = less smoothing (EMA of score)
