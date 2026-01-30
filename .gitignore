@@ -66,10 +66,10 @@ dist/
 .pytest_cache/
 
 # Trained models and data
-*.pkl
-*.csv
+# *.pkl
+# *.csv
 *.bag
-models/
+# models/
 
 # IDE
 .vscode/

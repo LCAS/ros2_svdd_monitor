@@ -105,7 +105,7 @@ class MSVDDNode(Node):
         self.score_pub = self.create_publisher(Float32, '/ms_svdd/anomaly_score', 10)
 
         self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_cb, 10)
-        self.create_subscription(Imu, '/imu', self.imu_cb, 10)
+        self.create_subscription(Imu, '/imu/data_raw', self.imu_cb, 10)
         self.create_subscription(Odometry, '/odom', self.odom_cb, 10)
 
     def cmd_vel_cb(self, msg: Twist):

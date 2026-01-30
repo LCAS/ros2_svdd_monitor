@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Record /cmd_vel and /imu for a duration and save sliding-window features.
+"""Record /cmd_vel, /odom and /imu for a duration and save sliding-window features.
 
 Usage:
   python3 record_features.py --duration 30 --rate 10 --window-size 10 --out features.npz
 
-The script subscribes to `/cmd_vel` and `/imu`, records messages, aligns them
+The script subscribes to `/cmd_vel`, `/odom` and `/imu`, records messages, aligns them
 to a time grid at `--rate` Hz, computes sliding-window features using
 `extract_window_features`, and saves array `X` into an .npz file.
 """
@@ -55,7 +55,7 @@ class Recorder(Node):
         self.odom_times = []
         self.odom_vals = []
         self.sub_cmd = self.create_subscription(Twist, '/cmd_vel', self.cb_cmd, 10)
-        self.sub_imu = self.create_subscription(Imu, '/imu', self.cb_imu, 10)
+        self.sub_imu = self.create_subscription(Imu, '/imu/data_raw', self.cb_imu, 10)
         self.sub_odom = self.create_subscription(Odometry, '/odom', self.cb_odom, 10)
 
     def cb_cmd(self, msg: Twist):
